@@ -1,0 +1,93 @@
+<mujoco model="bugtrap">
+  
+  <option timestep="0.01" 
+          iterations="10" 
+          ls_iterations="20" 
+          impratio="10">
+    <flag contact="enable" 
+          eulerdamp="disable"/>
+  </option>
+
+  <default>
+    <geom friction="5 0.5 0.5" condim="3"/>
+  </default>
+
+  <worldbody>
+    <body name="goal" mocap="true" pos="0.2 0.0 0.01" quat="1 0 0 0">
+      <geom type="sphere" size=".01" contype="0" conaffinity="0" rgba="0 1 0 .5"/>
+    </body>
+
+    <camera name="top_view" pos="0 -0.635 0.635" xyaxes="1 0 0 0 0.7 0.7"/>
+
+    <!-- ========== OUTER WALLS ========== -->
+    <!-- Left wall at x = -0.30 (center shifted outward by half-thickness 0.005) -->
+    <body name="wall_left" pos="-0.305 0 0.01">
+      <geom name="wall_left" type="box" size="0.005 0.30 0.02" mass="50"
+            contype="2" conaffinity="0" rgba="0.7 0.7 0.7 1"/>
+    </body>
+    <!-- Right wall at x = 0.30 -->
+    <body name="wall_right" pos="0.305 0 0.01">
+      <geom name="wall_right" type="box" size="0.005 0.30 0.02" mass="50"
+            contype="2" conaffinity="0" rgba="0.7 0.7 0.7 1"/>
+    </body>
+
+    <!-- Bottom wall at y = -0.30 -->
+    <body name="wall_bottom" pos="0 -0.305 0.01">
+      <geom name="wall_bottom" type="box" size="0.30 0.005 0.02" mass="50"
+            contype="2" conaffinity="0" rgba="0.7 0.7 0.7 1"/>
+    </body>
+
+    <!-- Top wall at y = 0.30 -->
+    <body name="wall_top" pos="0 0.305 0.01">
+      <geom name="wall_top" type="box" size="0.30 0.005 0.02" mass="50"
+            contype="2" conaffinity="0" rgba="0.7 0.7 0.7 1"/>
+    </body>
+
+    <!-- ========== INNER “U” WALLS ========== -->
+    <!-- Vertical inner leg at x = 0.10, spanning y ∈ [-0.10, 0.10] -->
+    <body name="wall_inner_x" pos="0.100 0.000 0.01">
+      <geom name="wall_inner_x" type="box" size="0.005 0.095 0.02" mass="25"
+            contype="2" conaffinity="0" rgba="0.7 0.7 0.7 1"/>
+    </body>
+
+    <!-- Lower inner bar at y = -0.10, spanning x ∈ [-0.10, 0.10] -->
+    <body name="wall_inner_y_minus" pos="0.02 -0.100 0.01">
+      <geom name="wall_inner_y_minus" type="box" size="0.075 0.005 0.02" mass="25"
+            contype="2" conaffinity="2" rgba="0.7 0.7 0.7 1"/>
+    </body>
+
+    <!-- Upper inner bar at y = 0.10 -->
+    <body name="wall_inner_y_plus" pos="0.02 0.100 0.01">
+      <geom name="wall_inner_y_plus" type="box" size="0.075 0.005 0.02" mass="25"
+            contype="2" conaffinity="0" rgba="0.7 0.7 0.7 1"/>
+    </body>
+
+    <!-- Moving particle -->
+    <body name="pointmass" pos="0 0 .015" gravcomp="1">
+      <camera name="cam0" pos="0 -0.635 0.635" xyaxes="1 0 0 0 0.7 0.7"/>
+      <joint name="root_x" type="slide" axis="1 0 0"/>
+      <joint name="root_y" type="slide" axis="0 1 0"/>
+ 
+      <geom name="pointmass" type="sphere" 
+            size=".01" mass="0.15"
+            margin="0.001"
+            solimp="0.9 0.95 0.02"
+            contype="2" conaffinity="2"/>
+          <site name="s_touch" type="sphere" size=".01" rgba="1 0 0 .15"/>
+          <site name="s_force" type="sphere" size=".01" rgba="0 0 1 .15"/>
+      <site name="pointmass" pos="0 0 0" size="0.01"/>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <touch name="sphere_touch" site="s_touch"/>
+    <force name="sphere_force" site="s_force"/>
+  </sensor>
+
+  <actuator>
+    <motor name="x_motor" joint="root_x" gear="1" ctrllimited="true" ctrlrange="-.5 .5"/>
+    <motor name="y_motor" joint="root_y" gear="1" ctrllimited="true" ctrlrange="-.5 .5"/>
+  </actuator>
+</mujoco>
+
+

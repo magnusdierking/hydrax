@@ -1,10 +1,3 @@
-"""Velocity-controlled point mass navigating a U-shaped maze.
-
-Uses the same dynamics as ``hydrax.tasks.particle.Particle`` but adds
-three inner walls forming a U around the start position, creating a
-local minimum that requires global exploration to escape.
-"""
-
 from typing import Dict
 
 import jax
@@ -16,8 +9,91 @@ from hydrax import ROOT
 from hydrax.task_base import Task
 
 
+class Bugtrap(Task):
+    """Extends particle task with a local minimum (the "bugtrap").
+
+    This prevents the mass from reaching the target.
+    """
+
+    def __init__(self, impl: str = "jax"):
+        """Load the MuJoCo model and set task parameters."""
+        mj_model = mujoco.MjModel.from_xml_path(
+            ROOT + "/models/bugtrap/scene.xml"
+        )
+
+        super().__init__(
+            mj_model,
+            trace_sites=["pointmass"],
+            impl=impl,
+        )
+
+        self.pointmass_id = mj_model.site("pointmass").id
+        self.pointmass_body_id = mj_model.site("pointmass").bodyid[0]
+
+        self.sid = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "sphere_force"
+        )
+        self.sid_touch = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "sphere_touch"
+        )
+        self.adr = mj_model.sensor_adr[self.sid]
+        self.adr_touch = mj_model.sensor_adr[self.sid_touch]
+        self.goal_id = mj_model.body_mocapid[mj_model.body("goal").id]
+        self.actuator_joint_idxs = mj_model.actuator_trnid[:, 0]
+
+    def contact_force_cost(self, state: mjx.Data) -> jax.Array:
+        """Binary cost for contact (external forces only)."""
+        contact = jnp.linalg.norm(state.cfrc_ext[self.pointmass_body_id])
+        contact = jnp.where(contact > 0.0, 1.0, 0.0)
+        return contact
+
+    def goal_cost(self, state: mjx.Data) -> jax.Array:
+        """Distance to goal (1-norm)."""
+        position_cost = jnp.linalg.norm(
+            state.site_xpos[self.pointmass_id] - state.mocap_pos[self.goal_id]
+        )
+        return position_cost
+
+    def running_cost(
+        self, state: mjx.Data, control: jax.Array = None
+    ) -> jax.Array:
+        """The running cost ℓ(xₜ, uₜ) encourages target tracking."""
+        contact_cost = self.contact_force_cost(state)
+        position_cost = self.goal_cost(state)
+        running_cost = 5 * contact_cost + 0.1 * jnp.square(position_cost)
+
+        return running_cost
+
+    def terminal_cost(self, state: mjx.Data) -> jax.Array:
+        """The terminal cost ϕ(x_T)."""
+        return 1 * self.running_cost(state, jnp.zeros(self.mj_model.nu))
+
+    def domain_randomize_model(self, rng: jax.Array) -> Dict[str, jax.Array]:
+        """Randomly perturb the actuator gains."""
+        multiplier = jax.random.uniform(
+            rng,
+            self.model.actuator_gainprm[:, 0].shape,
+            minval=0.9,
+            maxval=1.1,
+        )
+        new_gains = self.model.actuator_gainprm[:, 0] * multiplier
+        new_gains = self.model.actuator_gainprm.at[:, 0].set(new_gains)
+        return {"actuator_gainprm": new_gains}
+
+    def domain_randomize_data(
+        self, data: mjx.Data, rng: jax.Array
+    ) -> Dict[str, jax.Array]:
+        """Randomly shift the measured particle position."""
+        shift = jax.random.uniform(rng, (2,), minval=-0.0001, maxval=0.0001)
+        return {"qpos": data.qpos + shift}
+
+
 class BugTrap(Task):
-    """A planar point mass that must navigate around U-shaped inner walls."""
+    """A planar point mass that must navigate around U-shaped inner walls.
+
+    Uses particle_navigation model with an SDF-based wall proximity cost,
+    creating a differentiable local minimum that requires global exploration.
+    """
 
     def __init__(
         self,
@@ -33,8 +109,7 @@ class BugTrap(Task):
         Args:
             impl: Which backend implementation to use.
             wall_weight: Multiplier on the exponential wall proximity cost.
-            wall_sharpness: Decay rate in the ``exp(-sharpness * dist)``
-                wall cost.
+            wall_sharpness: Decay rate in the ``exp(-sharpness * dist)`` wall cost.
             position_weight: Weight on the squared position tracking error.
             velocity_weight: Weight on the squared velocity penalty.
             control_weight: Weight on the squared control penalty.
@@ -52,8 +127,7 @@ class BugTrap(Task):
         self.velocity_weight = velocity_weight
         self.control_weight = control_weight
 
-        # Cache the planar geometry of the three inner walls (wall_ix,
-        # wall_iy, wall_neg_iy) for the SDF-style cost term.
+        # Cache planar geometry of the three inner walls for the SDF-style cost.
         self._wall_pos = jnp.array(
             [
                 mj_model.geom("wall_ix").pos[:2],
@@ -71,7 +145,6 @@ class BugTrap(Task):
 
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
         """The running cost ℓ(xₜ, uₜ): wall SDF + tracking + control."""
-        # Box-SDF distance to each inner wall (signed, axis-aligned).
         pos = state.site_xpos[self.pointmass_id][None, :2]
         wall_dist = jnp.abs(pos - self._wall_pos) - self._wall_size
         outside_dist = jnp.maximum(wall_dist, 0.0)
