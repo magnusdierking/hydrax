@@ -26,7 +26,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     initial_knots: jax.Array = None,
     fixed_camera_id: int = None,
     show_traces: bool = True,
-    max_traces: int = 5,
+    max_traces: int = None,
+    trace_idxs: Sequence[int] = None,
     trace_width: float = 5.0,
     trace_color: Sequence = [1.0, 1.0, 1.0, 0.1],
     reference: np.ndarray = None,
@@ -104,7 +105,21 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     _ = jit_interp_func(tq, tk, knots)
     _ = jit_interp_func(tq, tk, knots)
     print(f"Time to jit: {time.time() - st:.3f} seconds")
-    num_traces = min(rollouts.controls.shape[1], max_traces)
+    num_rollouts = rollouts.controls.shape[1]
+    if trace_idxs is not None and max_traces is not None:
+        if max_traces != len(trace_idxs):
+            raise ValueError(
+                f"max_traces ({max_traces}) conflicts with "
+                f"len(trace_idxs) ({len(trace_idxs)}). "
+                "Set only one, or ensure they match."
+            )
+    if trace_idxs is not None:
+        trace_idxs = [i for i in trace_idxs if i < num_rollouts]
+    elif max_traces is not None:
+        trace_idxs = list(range(min(num_rollouts, max_traces)))
+    else:
+        trace_idxs = list(range(num_rollouts))
+    num_traces = len(trace_idxs)
 
     # Ghost reference setup
     if reference is not None:
@@ -188,7 +203,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             if show_traces:
                 ii = 0
                 for k in range(num_trace_sites):
-                    for i in range(num_traces):
+                    for i in trace_idxs:
                         for j in range(controller.ctrl_steps):
                             mujoco.mjv_connector(
                                 viewer.user_scn.geoms[ii],

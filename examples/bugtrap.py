@@ -227,6 +227,6 @@ run_interactive(
     mj_model,
     mj_data,
     frequency=50,
-    show_traces=False,
-    max_traces=5,
+    show_traces=True,
+    trace_idxs=[0, 2, 4, 8, 12],
 )
