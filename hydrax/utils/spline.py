@@ -73,97 +73,91 @@ def get_interp_func(method: InterpMethodType) -> InterpFuncType:
     return interp_func
 
 
-def interp_akima(
-    tq: jax.Array, tk: jax.Array, knots: jax.Array
-) -> jax.Array:
-    """Akima spline interpolation over a batch of waypoint sequences.
-
-    Uses ``interpax.Akima1DInterpolator`` (Akima, "A New Method of
-    Interpolation and Smooth Curve Fitting Based on Local Procedures",
-    J. ACM 17(4), 1970, pp. 589--602).
-
-    Args:
-        tq: Query times, shape ``(H,)``.
-        tk: Knot positions, shape ``(M,)``.
-        knots: Waypoint values, shape ``(B, M, D)``.
-
-    Returns:
-        Interpolated values of shape ``(B, H, D)``.
-    """
-
-    def _one(c: jax.Array) -> jax.Array:
-        return Akima1DInterpolator(tk, c, check=False)(tq)
-
-    return vmap(_one)(knots)
+# ---------------------------------------------------------------------------
+# B-spline utilities for MTP
+# ---------------------------------------------------------------------------
 
 
-def compute_b_spline_matrix(
-    x: jax.Array, degree: int, num_points: int
-) -> jax.Array:
-    """Build the B-spline basis matrix on the valid parameter domain.
+def clamped_knot_vector(
+    num_ctrl_points: int,
+    degree: int,
+    dtype: jnp.dtype = jnp.float32,
+) -> jnp.ndarray:
+    """Create a clamped (open) B-spline knot vector on [0, 1].
 
-    Constructs the Cox-de Boor basis matrix evaluated at ``num_points``
-    uniformly-spaced parameter values inside the valid B-spline domain
-    ``[x[degree], x[-degree-1]]``, so every row satisfies the partition
-    of unity.
+    The first and last ``degree + 1`` knots are repeated so the spline
+    interpolates the first and last control points exactly.
 
     Args:
-        x: The knot vector, shape ``(M + degree + 1,)``.
-        degree: The B-spline degree (``>= 2``).
-        num_points: Number of evaluation points across the valid domain.
+        num_ctrl_points: Number of control points.
+        degree: B-spline degree (≥ 1).
+        dtype: Array dtype.
 
     Returns:
-        Basis matrix of shape ``(num_points, M)`` whose rows sum to 1.
+        Knot vector of length ``num_ctrl_points + degree + 1``.
     """
-    t_start = x[degree]
-    t_end = x[-degree - 1]
-    # Tiny inward shrink avoids the right-open boundary at t == t_end.
-    eps = (t_end - t_start) * 1e-7
-    t_values = jnp.linspace(t_start, t_end - eps, num_points)
+    n_internal = num_ctrl_points - degree
+    start = jnp.zeros(degree + 1, dtype=dtype)
+    end = jnp.ones(degree + 1, dtype=dtype)
+    internal = jnp.arange(1, n_internal, dtype=dtype) / n_internal
+    return jnp.concatenate([start, internal, end])
 
+
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def compute_bspline_basis(
+    knots: jax.Array,
+    degree: int,
+    num_points: int,
+    dtype: jnp.dtype = jnp.float32,
+) -> jax.Array:
+    """Compute the B-spline basis matrix via Cox–de Boor recursion.
+
+    Args:
+        knots: The knot vector of shape ``(num_ctrl_points + degree + 1,)``.
+        degree: B-spline degree.
+        num_points: Number of uniformly spaced query points in the active
+            parameter domain ``[knots[degree], knots[-1-degree]]``.
+        dtype: Output dtype.
+
+    Returns:
+        Basis matrix ``B`` of shape ``(num_points, num_ctrl_points)`` such that
+        ``B @ control_points`` yields the evaluated spline values.
+    """
+    knots = jnp.asarray(knots, dtype=dtype)
+    one = jnp.array(1.0, dtype=dtype)
+    zero = jnp.array(0.0, dtype=dtype)
+
+    # Query points in the active domain, excluding the start
+    t = jnp.linspace(
+        knots[degree], knots[-1 - degree],
+        num_points + 1, dtype=dtype,
+    )[1:]
+
+    # Degree-0 basis: N_{i,0}(t) = 1 if knots[i] <= t < knots[i+1]
     b = jnp.where(
-        (x[:-1] <= t_values[:, None]) & (t_values[:, None] < x[1:]),
-        1.0,
-        0.0,
+        (knots[:-1] <= t[:, None]) & (t[:, None] < knots[1:]),
+        one,
+        zero,
     )
 
+    # Cox–de Boor recursion
     for d in range(1, degree + 1):
-        left_d1, left_d2 = x[d:-1], x[: -d - 1]
+        left_hi, left_lo = knots[d:-1], knots[: -d - 1]
         b_left = jnp.where(
-            left_d1 > left_d2,
-            (
-                (t_values[:, None] - left_d2)
-                / jnp.where(left_d1 > left_d2, left_d1 - left_d2, 1.0)
-            )
-            * b[:, :-1],
-            0.0,
+            left_hi > left_lo,
+            ((t[:, None] - left_lo) / (left_hi - left_lo)) * b[:, :-1],
+            zero,
         )
-        right_d1, right_d2 = x[d + 1 :], x[1:-d]
+        right_hi, right_lo = knots[d + 1 :], knots[1:-d]
         b_right = jnp.where(
-            right_d1 > right_d2,
-            (
-                (right_d1 - t_values[:, None])
-                / jnp.where(right_d1 > right_d2, right_d1 - right_d2, 1.0)
-            )
-            * b[:, 1:],
-            0.0,
+            right_hi > right_lo,
+            ((right_hi - t[:, None]) / (right_hi - right_lo)) * b[:, 1:],
+            zero,
         )
         b = b_left + b_right
 
+    # Fix the last row: the rightmost basis function should be 1 at t = 1
+    last = b.shape[0] - 1
+    b = b.at[last, :].set(0.0).at[last, -1].set(1.0)
+
     return b
-
-
-def interp_bspline(
-    bmat: jax.Array, knots: jax.Array
-) -> jax.Array:
-    """B-spline interpolation via a pre-computed basis matrix.
-
-    Args:
-        bmat: Basis matrix of shape ``(H, M)`` from
-            :func:`compute_b_spline_matrix`.
-        knots: Waypoint values, shape ``(B, M, D)``.
-
-    Returns:
-        Interpolated values of shape ``(B, H, D)``.
-    """
-    return jnp.einsum("bmd,hm->bhd", knots, bmat)
