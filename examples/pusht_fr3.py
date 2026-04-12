@@ -1,5 +1,4 @@
 import argparse
-from copy import deepcopy
 
 import jax
 import mujoco
@@ -12,25 +11,26 @@ from evosax.algorithms.distribution_based import (
     xNES,
 )
 
-from hydrax.algs import CEM, DIAL, MPPI, Evosax, PredictiveSampling
+from hydrax.algs import CEM, DIAL, MPPI, MTP, Evosax, PredictiveSampling
 from hydrax.risk import WorstCase
 from hydrax.simulation.deterministic import run_interactive
-from hydrax.tasks.pusht import PushT
+from hydrax.tasks.pusht_fr3 import PushTFr3
 
 """
-Run an interactive simulation of the push-T task.
+Run an interactive simulation of the push-T FR3 task.
 
 Double click on the green target, then drag it around with [ctrl + right-click].
 """
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
-    description="Run an interactive simulation of the push-T task."
+    description="Run an interactive simulation of the push-T FR3 task."
 )
 parser.add_argument(
     "--warp",
     action="store_true",
     help="Whether to use the (experimental) MjWarp backend. (default: False)",
+    required=False,
 )
 subparsers = parser.add_subparsers(
     dest="algorithm", help="Sampling algorithm (choose one)"
@@ -38,6 +38,7 @@ subparsers = parser.add_subparsers(
 subparsers.add_parser("ps", help="Predictive Sampling")
 subparsers.add_parser("mppi", help="Model Predictive Path Integral Control")
 subparsers.add_parser("cem", help="Cross-Entropy Method")
+subparsers.add_parser("mtp", help="MTP")
 subparsers.add_parser("cmaes", help="CMA-ES")
 subparsers.add_parser("openes", help="OpenAI-ES")
 subparsers.add_parser("sa", help="Simulated Annealing")
@@ -52,11 +53,12 @@ args = parser.parse_args()
 # ============================================================
 # Global options — shared across all algorithms
 # ============================================================
-NUM_SAMPLES = 128
-NUM_RANDOMIZATIONS = 4
+NUM_SAMPLES = 64
+NUM_RANDOMIZATIONS = 1
 PLAN_HORIZON = 0.5
-SPLINE_TYPE = "zero"
-NUM_KNOTS = 6
+SPLINE_TYPE = "cubic"
+MANIPULATION_TYPE = "free"
+NUM_KNOTS = 8
 
 # Shared keyword arguments passed to every controller
 shared_kwargs = dict(
@@ -67,16 +69,20 @@ shared_kwargs = dict(
     num_knots=NUM_KNOTS,
 )
 
-
 # Define the task (cost and dynamics)
-task = PushT(impl="warp" if args.warp else "jax")
+task = PushTFr3(
+    impl="warp" if args.warp else "jax",
+    trace_sites=["ee_site"],
+    manipulation_type=MANIPULATION_TYPE,
+)
 
 # Set the controller based on command-line arguments
 if args.algorithm == "ps" or args.algorithm is None:
     print("Running predictive sampling")
     ctrl = PredictiveSampling(
         task,
-        noise_level=0.4,
+        noise_level=0.1,
+        risk_strategy=WorstCase(),
         **shared_kwargs,
     )
 
@@ -99,7 +105,20 @@ elif args.algorithm == "cem":
         explore_fraction=0.5,
         **shared_kwargs,
     )
-
+elif args.algorithm == "mtp":
+    print("Running MTP")
+    ctrl = MTP(
+        task,
+        num_layers=3,
+        nodes_per_layer=50,
+        degree=2,
+        beta=0.3,
+        num_elites=8,
+        sigma_start=0.3,
+        sigma_min=0.05,
+        sigma_max=0.5,
+        **shared_kwargs,
+    )
 elif args.algorithm == "cmaes":
     print("Running CMA-ES")
     ctrl = Evosax(
@@ -167,18 +186,21 @@ else:
     parser.error("Invalid algorithm")
 
 # Define the model used for simulation
-mj_model = deepcopy(task.mj_model)
-mj_model.opt.timestep = 0.001
-mj_model.opt.iterations = 100
-mj_model.opt.ls_iterations = 50
+mj_model = task.mj_model
 mj_data = mujoco.MjData(mj_model)
-mj_data.qpos = [0.1, 0.1, 1.3, 0.0, 0.0]
+# set q to keyframe
+key_name = "home"
+key_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_KEY, key_name)
+if key_id != -1:
+    mj_data.qpos = mj_model.key_qpos[key_id]
+    print(f"Set initial state to keyframe: {key_name}")
 
 # Run the interactive simulation
 run_interactive(
     ctrl,
     mj_model,
     mj_data,
-    frequency=50,
-    show_traces=False,
+    frequency=20,
+    show_traces=True,
+    max_traces=5,
 )
