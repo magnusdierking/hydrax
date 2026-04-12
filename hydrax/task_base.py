@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Sequence
+from typing import Dict, Optional, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -23,6 +23,8 @@ class Task(ABC):
         self,
         mj_model: mujoco.MjModel,
         trace_sites: Sequence[str] | None = None,
+        nu: Optional[int] = None,
+        ctrl_limits: Optional[Dict[str, jnp.ndarray]] = None,
         impl: str = "jax",
     ) -> None:
         """Set the model and simulation parameters.
@@ -30,6 +32,8 @@ class Task(ABC):
         Args:
             mj_model: The MuJoCo model to use for simulation.
             trace_sites: A list of site names to visualize with traces.
+            nu: The number of actuators in the model.
+            ctrl_limits: The control limits for the model.
             impl: The backend implementation for rollouts ("jax" for standard
                   MJX or "warp" for MjWarp).
 
@@ -38,19 +42,41 @@ class Task(ABC):
         """
         assert isinstance(mj_model, mujoco.MjModel)
         self.mj_model = mj_model
-        self.model = mjx.put_model(mj_model, impl=impl)
+        self.model = mjx.put_model(self.mj_model, impl=impl)
 
-        # Set actuator limits
-        self.u_min = jnp.where(
-            mj_model.actuator_ctrllimited,
-            mj_model.actuator_ctrlrange[:, 0],
-            -jnp.inf,
-        )
-        self.u_max = jnp.where(
-            mj_model.actuator_ctrllimited,
-            mj_model.actuator_ctrlrange[:, 1],
-            jnp.inf,
-        )
+        # Here we set the number of actuators to use for control
+        # If nu is None, we use all actuators as in original hydrax
+        self.nu = nu if nu is not None else self.model.nu
+
+        if nu is None:
+            # Set actuator limits
+            self.u_min = jnp.where(
+                mj_model.actuator_ctrllimited,
+                mj_model.actuator_ctrlrange[:, 0],
+                -jnp.inf,
+            )
+            self.u_max = jnp.where(
+                mj_model.actuator_ctrllimited,
+                mj_model.actuator_ctrlrange[:, 1],
+                jnp.inf,
+            )
+            self.act_min = None
+            self.act_max = None
+        else:
+            if ctrl_limits is None:
+                raise ValueError("'ctrl_limits' must be provided if 'nu' is")
+            self.u_min = ctrl_limits["u_min"]
+            self.u_max = ctrl_limits["u_max"]
+            self.act_min = jnp.where(
+                mj_model.actuator_ctrllimited,
+                mj_model.actuator_ctrlrange[:, 0],
+                -jnp.inf,
+            )
+            self.act_max = jnp.where(
+                mj_model.actuator_ctrllimited,
+                mj_model.actuator_ctrlrange[:, 1],
+                jnp.inf,
+            )
 
         # Simulation timestep
         self.dt = mj_model.opt.timestep
@@ -158,3 +184,32 @@ class Task(ABC):
             A new `mjx.Data` instance for this task.
         """
         return mjx.make_data(self.mj_model, impl=self.model.impl, **kwargs)
+
+    ##############################################
+    ##             Experimental                 ##
+    ##############################################
+
+    def control_mapper_mjx(self, state: mjx.Data, u: jax.Array) -> jax.Array:
+        """Map controls from sampling space to actuator space (MJX version).
+
+        By default, this just returns the input control.
+        Specific tasks can override this method to implement custom control
+        mapping, e.g. to enable task space sampling and joint space control.
+
+        NOTE: This method is used inside the JITed rollouts and needs to be
+        JIT compatible
+        """
+        return u
+
+    def control_mapper_mj(
+        self, state: mujoco.MjData, u: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Map controls from sampling space to actuator space (MuJoCo version).
+
+        By default, this just returns the input control.
+        Specific tasks can override this method to implement custom control
+        mapping, e.g. to enable task space sampling and joint space control.
+
+        NOTE: This method is used in the sim to sim scripts
+        """
+        return u

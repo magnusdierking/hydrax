@@ -82,7 +82,7 @@ class Evosax(SamplingBasedController):
         self.strategy = optimizer(
             population_size=num_samples,
             # Only to inform the dimension to evosax
-            solution=jnp.zeros(task.model.nu * self.num_knots),
+            solution=jnp.zeros(task.nu * self.num_knots),
             **kwargs,
         )
 
@@ -99,9 +99,7 @@ class Evosax(SamplingBasedController):
 
         opt_state = self.strategy.init(
             key=init_rng,
-            mean=jnp.reshape(
-                _params.mean, (self.task.model.nu * self.num_knots)
-            ),
+            mean=jnp.reshape(_params.mean, (self.task.nu * self.num_knots)),
             params=self.es_params,
         )
         return EvosaxParams(
@@ -124,7 +122,7 @@ class Evosax(SamplingBasedController):
             (
                 self.strategy.population_size,
                 self.num_knots,
-                self.task.model.nu,
+                self.task.nu,
             ),
         )
 
@@ -162,7 +160,7 @@ class Evosax(SamplingBasedController):
             opt_state.mean,
             (
                 self.num_knots,
-                self.task.model.nu,
+                self.task.nu,
             ),
         )
 

@@ -248,13 +248,17 @@ class SamplingBasedController(ABC):
             The states (stacked) experienced during the rollouts.
             A Trajectory object containing the control, costs, and trace sites.
         """
+        # make sure state is valid
+        state = mjx.forward(model, state)
 
         def _scan_fn(
             x: mjx.Data, u: jax.Array
         ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array]]:
             """Compute the cost and observation, then advance the state."""
-            x = x.replace(ctrl=u)
+            u_mapped = self.task.control_mapper_mjx(x, u)
+            x = x.replace(ctrl=u_mapped)
             x = mjx.step(model, x)  # step model + compute site positions
+
             cost = self.dt * self.task.running_cost(x, u)
             sites = self.task.get_trace_sites(x)
             return x, (x, cost, sites)
@@ -291,9 +295,9 @@ class SamplingBasedController(ABC):
         mean = (
             initial_knots
             if initial_knots is not None
-            else jnp.zeros((self.num_knots, self.task.model.nu))
+            else jnp.zeros((self.num_knots, self.task.nu))
         )
-        assert mean.shape == (self.num_knots, self.task.model.nu), (
+        assert mean.shape == (self.num_knots, self.task.nu), (
             f"Initial knots must have shape (num_knots, nu), got {mean.shape}"
         )
         tk = jnp.linspace(0.0, self.plan_horizon, self.num_knots)

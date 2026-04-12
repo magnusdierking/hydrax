@@ -55,6 +55,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         fixed_camera_id: The camera ID to use for the fixed camera view.
         show_traces: Whether to show traces for the site positions.
         max_traces: The maximum number of traces to show at once.
+        trace_idxs: The indices of the traces to show.
         trace_width: The width of the trace lines (in pixels).
         trace_color: The RGBA color of the trace lines.
         reference: The reference trajectory (qs) to visualize.
@@ -82,10 +83,10 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Create a data structure for the controller to run rollouts from.
     mjx_data = controller.task.make_data()
     mjx_data = mjx_data.replace(
-        qpos=mj_data.qpos,
-        qvel=mj_data.qvel,
-        mocap_pos=mj_data.mocap_pos,
-        mocap_quat=mj_data.mocap_quat,
+        qpos=jnp.array(mj_data.qpos, dtype=jnp.float32),
+        qvel=jnp.array(mj_data.qvel, dtype=jnp.float32),
+        mocap_pos=jnp.array(mj_data.mocap_pos, dtype=jnp.float32),
+        mocap_quat=jnp.array(mj_data.mocap_quat, dtype=jnp.float32),
     )
 
     # Initialize the controller
@@ -187,11 +188,11 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             # Set the start state for the controller
             mjx_data = mjx_data.replace(
-                qpos=jnp.array(mj_data.qpos),
-                qvel=jnp.array(mj_data.qvel),
-                mocap_pos=jnp.array(mj_data.mocap_pos),
-                mocap_quat=jnp.array(mj_data.mocap_quat),
-                time=mj_data.time,
+                qpos=jnp.array(mj_data.qpos, dtype=jnp.float32),
+                qvel=jnp.array(mj_data.qvel, dtype=jnp.float32),
+                mocap_pos=jnp.array(mj_data.mocap_pos, dtype=jnp.float32),
+                mocap_quat=jnp.array(mj_data.mocap_quat, dtype=jnp.float32),
+                time=jnp.array(mj_data.time, dtype=jnp.float32),
             )
 
             # Do a replanning step
@@ -238,12 +239,20 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             tq = jnp.arange(0, sim_steps_per_replan) * sim_dt + t_curr
             tk = policy_params.tk
+            # print("Knots: ", policy_params.mean)
             knots = policy_params.mean[None, ...]
             us = np.asarray(jit_interp_func(tq, tk, knots))[0]  # (ss, nu)
 
             # simulate the system between spline replanning steps
             for i in range(sim_steps_per_replan):
-                mj_data.ctrl[:] = np.array(us[i])
+                # print("Control: ", us[i])
+                # print(
+                #     "Control mapped: ",
+                #     controller.task.control_mapper_mj(mj_data, us[i]),
+                # )
+                mj_data.ctrl[:] = np.array(
+                    controller.task.control_mapper_mj(mj_data, us[i])
+                )
                 mujoco.mj_step(mj_model, mj_data)
                 viewer.sync()
 
