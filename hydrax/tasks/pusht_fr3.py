@@ -70,6 +70,9 @@ class PushTFr3(Task):
             trace_sites=trace_sites,
             nu=nu,
             ctrl_limits=ctrl_limits,
+            ncon_per_env=24,
+            nac_per_env=24,
+            nj_per_env=99,
         )
 
         # Get sensor ids
@@ -285,9 +288,6 @@ class PushTFr3(Task):
     def domain_randomize_model(self, rng: jax.Array) -> Dict[str, jax.Array]:
         return {}
 
-    def make_data(self) -> mjx.Data:
-        """Create a new state object with extra constraints allocated."""
-        return super().make_data(nconmax=64 * 64, naconmax=200)
 
     @partial(jax.jit, static_argnums=(0,))
     def control_mapper_mjx(self, state: mjx.Data, u: jax.Array) -> jax.Array:

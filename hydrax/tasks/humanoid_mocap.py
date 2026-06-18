@@ -92,6 +92,8 @@ class HumanoidMocap(Task):
             mj_model,
             trace_sites=["imu_in_torso", "left_foot", "right_foot"],
             impl=impl,
+            nac_per_env=30,
+            nj_per_env=120,
         )
 
         # Download and load reference data
@@ -389,6 +391,4 @@ class HumanoidMocap(Task):
 
         return {"qpos": qpos, "qvel": qvel}
 
-    def make_data(self) -> mjx.Data:
-        """Create a new state object with extra constraints allocated."""
-        return super().make_data(naconmax=20000, njmax=200)
+

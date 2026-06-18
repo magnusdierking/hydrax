@@ -19,6 +19,8 @@ class CubeRotation(Task):
             mj_model,
             trace_sites=["cube_center", "if_tip", "mf_tip", "rf_tip", "th_tip"],
             impl=impl,
+            nac_per_env=51,
+            nj_per_env=204,
         )
 
         # Get sensor ids
@@ -82,6 +84,4 @@ class CubeRotation(Task):
         shift = 0.005 * jax.random.normal(rng, (self.model.nq,))
         return {"qpos": data.qpos + shift}
 
-    def make_data(self) -> mjx.Data:
-        """Create a new state object with extra constraints allocated."""
-        return super().make_data(naconmax=30000, njmax=200)
+

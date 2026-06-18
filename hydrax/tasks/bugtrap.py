@@ -25,6 +25,8 @@ class Bugtrap(Task):
             mj_model,
             trace_sites=["pointmass"],
             impl=impl,
+            nac_per_env=3,
+            nj_per_env=12,
         )
 
         self.pointmass_id = mj_model.site("pointmass").id
@@ -117,7 +119,14 @@ class BugTrap(Task):
         mj_model = mujoco.MjModel.from_xml_path(
             ROOT + "/models/particle_navigation/scene.xml"
         )
-        super().__init__(mj_model, trace_sites=["pointmass"], impl=impl)
+        super().__init__(
+            mj_model,
+            trace_sites=["pointmass"],
+            impl=impl,
+            ncon_per_env=6,
+            nac_per_env=6,
+            nj_per_env=12,
+        )
 
         self.pointmass_id = mj_model.site("pointmass").id
 
@@ -184,6 +193,4 @@ class BugTrap(Task):
         shift = jax.random.uniform(rng, (2,), minval=-0.01, maxval=0.01)
         return {"qpos": data.qpos + shift}
 
-    def make_data(self) -> mjx.Data:
-        """Create a new state with enough contact slots for MjWarp."""
-        return super().make_data(nconmax=10, naconmax=100)
+

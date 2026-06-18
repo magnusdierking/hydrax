@@ -15,7 +15,13 @@ class Walker(Task):
         mj_model = mujoco.MjModel.from_xml_path(
             ROOT + "/models/walker/scene.xml"
         )
-        super().__init__(mj_model, trace_sites=["torso_site"], impl=impl)
+        super().__init__(
+            mj_model,
+            trace_sites=["torso_site"],
+            impl=impl,
+            nac_per_env=15,
+            nj_per_env=63,
+        )
 
         # Get sensor ids
         self.torso_position_sensor = mujoco.mj_name2id(
@@ -67,6 +73,4 @@ class Walker(Task):
         )
         return 10.0 * height_cost + 3.0 * orientation_cost + 1.0 * velocity_cost
 
-    def make_data(self) -> mjx.Data:
-        """Create a new state object with extra constraints allocated."""
-        return super().make_data(naconmax=800)
+

@@ -17,7 +17,14 @@ class PushT(Task):
         mj_model = mujoco.MjModel.from_xml_path(
             ROOT + "/models/pusht/scene.xml"
         )
-        super().__init__(mj_model, trace_sites=["pusher"], impl=impl)
+        super().__init__(
+            mj_model,
+            trace_sites=["pusher"],
+            impl=impl,
+            ncon_per_env=24,
+            nac_per_env=24,
+            nj_per_env=96,
+        )
 
         # Get sensor ids
         self.block_position_sensor = mujoco.mj_name2id(
@@ -70,6 +77,4 @@ class PushT(Task):
         )
         return {"geom_friction": new_frictions}
 
-    def make_data(self) -> mjx.Data:
-        """Create a new state object with extra constraints allocated."""
-        return super().make_data(nconmax=6000)
+
