@@ -113,7 +113,8 @@ def run_controller(
         initial_knots: The initial control to use for the controller.
     """
     # Initialize the policy parameters and state estimate
-    mjx_data = ctrl.task.make_data()
+    num_envs = ctrl.num_samples * ctrl.num_randomizations
+    mjx_data = ctrl.task.make_data(num_envs=num_envs)
     policy_params = ctrl.init_params(initial_knots=initial_knots)
 
     # Print out some planning horizon information

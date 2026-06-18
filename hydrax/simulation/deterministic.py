@@ -81,7 +81,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     )
 
     # Create a data structure for the controller to run rollouts from.
-    mjx_data = controller.task.make_data()
+    num_envs = controller.num_samples * controller.num_randomizations
+    mjx_data = controller.task.make_data(num_envs=num_envs)
     mjx_data = mjx_data.replace(
         qpos=jnp.array(mj_data.qpos, dtype=jnp.float32),
         qvel=jnp.array(mj_data.qvel, dtype=jnp.float32),
