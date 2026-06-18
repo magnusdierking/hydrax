@@ -26,6 +26,9 @@ class Task(ABC):
         nu: Optional[int] = None,
         ctrl_limits: Optional[Dict[str, jnp.ndarray]] = None,
         impl: str = "jax",
+        ncon_per_env: int = 0,
+        nac_per_env: int = 0,
+        nj_per_env: int = 0,
     ) -> None:
         """Set the model and simulation parameters.
 
@@ -36,6 +39,12 @@ class Task(ABC):
             ctrl_limits: The control limits for the model.
             impl: The backend implementation for rollouts ("jax" for standard
                   MJX or "warp" for MjWarp).
+            ncon_per_env: Maximum detected contacts per parallel environment.
+                Set > 0 to override mjx.make_data defaults. For MjWarp this
+                is multiplied by num_envs in make_data(); for MJX it is used
+                as-is (each vmap'd instance is independent).
+            nac_per_env: Maximum active contacts per parallel environment.
+            nj_per_env: Maximum constraint rows (nefc) per parallel environment.
 
         Note: many other simulator parameters, e.g., simulator time step,
               Newton iterations, etc., are set in the model itself.
@@ -80,6 +89,11 @@ class Task(ABC):
 
         # Simulation timestep
         self.dt = mj_model.opt.timestep
+
+        # Per-environment contact/constraint budget (0 = use mjx defaults)
+        self._ncon_per_env = ncon_per_env
+        self._nac_per_env = nac_per_env
+        self._nj_per_env = nj_per_env
 
         # Get site IDs for points we want to trace
         trace_sites = trace_sites or []
@@ -164,26 +178,31 @@ class Task(ABC):
         """
         return {}
 
-    def make_data(self, **kwargs) -> mjx.Data:
-        """Create a new state consistent with this task.
+    def make_data(self, num_envs: int = 1) -> mjx.Data:
+        """Create a new MJX data object scaled to the rollout batch size.
 
-        By default, this just creates a new `mjx.Data` instance from the model.
-        Specific tasks can override this method to set parameters that must be
-        adjusted per task, e.g., nconmax and naconmax.
-
-        TODO(vincekurtz): figure out a smarter place to set naconmax and njmax.
-        N.B. when performing parallel rollouts with MjWarp, naconmax and
-        njmax need to be set high enough to support constraint solving across
-        *all* rollouts. This means that these parameters scale with the number
-        of parallel rollouts/samples, as well as the complexity of the task.
+        For MjWarp, naconmax/njmax must cover *all* parallel environments in a
+        single flat buffer, so they are multiplied by num_envs. For the MJX
+        (JAX) backend each vmap'd environment is independent, so per-env values
+        are used directly.
 
         Args:
-            **kwargs: Additional keyword arguments to pass to `mjx.make_data`.
+            num_envs: Total number of parallel environments
+                (num_samples * num_randomizations for the controller).
 
         Returns:
             A new `mjx.Data` instance for this task.
         """
+        kwargs: Dict[str, int] = {}
+        scale = num_envs if self.model.impl.value == "warp" else 1
+        if self._ncon_per_env > 0:
+            kwargs["nconmax"] = self._ncon_per_env * scale
+        if self._nac_per_env > 0:
+            kwargs["naconmax"] = self._nac_per_env * scale
+        if self._nj_per_env > 0:
+            kwargs["njmax"] = self._nj_per_env * scale
         return mjx.make_data(self.mj_model, impl=self.model.impl, **kwargs)
+
 
     ##############################################
     ##             Experimental                 ##
