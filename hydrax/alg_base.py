@@ -24,12 +24,17 @@ class Trajectory:
         knots: Control spline knots of shape (num_rollouts, num_knots, nu).
         costs: Costs of shape (num_rollouts, H+1).
         trace_sites: Positions of trace sites of shape (num_rollouts, H+1, 3).
+        trace_sites_per_domain: Optional per-randomization trace site positions
+            of shape (num_randomizations, num_rollouts, H+1, num_sites, 3).
+            Populated by ``rollout_with_randomizations`` for visualization;
+            ``None`` otherwise.
     """
 
     controls: jax.Array
     knots: jax.Array
     costs: jax.Array
     trace_sites: jax.Array
+    trace_sites_per_domain: jax.Array = None
 
     def __len__(self):
         """Return the number of time steps in the trajectory (T)."""
@@ -223,9 +228,14 @@ class SamplingBasedController(ABC):
         costs = self.risk_strategy.combine_costs(rollouts.costs)
         controls = rollouts.controls[0]  # identical over randomizations
         knots = rollouts.knots[0]  # identical over randomizations
+        trace_sites_per_domain = rollouts.trace_sites
         trace_sites = rollouts.trace_sites[0]  # visualization only, take 1st
         return rollouts.replace(
-            costs=costs, controls=controls, knots=knots, trace_sites=trace_sites
+            costs=costs,
+            controls=controls,
+            knots=knots,
+            trace_sites=trace_sites,
+            trace_sites_per_domain=trace_sites_per_domain,
         )
 
     @partial(jax.vmap, in_axes=(None, None, None, 0, 0))

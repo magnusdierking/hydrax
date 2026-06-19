@@ -54,8 +54,8 @@ args = parser.parse_args()
 # Global options — shared across all algorithms
 # ============================================================
 NUM_SAMPLES = 64
-NUM_RANDOMIZATIONS = 1
-PLAN_HORIZON = 0.5
+NUM_RANDOMIZATIONS = 2
+PLAN_HORIZON = 0.8
 SPLINE_TYPE = "cubic"
 MANIPULATION_TYPE = "free"
 NUM_KNOTS = 8
@@ -202,5 +202,6 @@ run_interactive(
     mj_data,
     frequency=20,
     show_traces=True,
+    show_domain_traces=True,
     max_traces=5,
 )

@@ -1,3 +1,4 @@
+import colorsys
 import os
 import time
 from typing import Sequence
@@ -11,6 +12,17 @@ import numpy as np
 from hydrax import ROOT
 from hydrax.alg_base import SamplingBasedController
 from hydrax.utils.video import VideoRecorder
+
+
+def _default_domain_palette(
+    num_domains: int, alpha: float
+) -> np.ndarray:
+    """Evenly spaced hues for distinguishing per-domain traces."""
+    palette = np.zeros((num_domains, 4), dtype=np.float32)
+    for d in range(num_domains):
+        r, g, b = colorsys.hsv_to_rgb(d / max(num_domains, 1), 0.8, 0.95)
+        palette[d] = (r, g, b, alpha)
+    return palette
 
 """
 Tools for deterministic (synchronous) simulation, with the simulator and
@@ -30,6 +42,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     trace_idxs: Sequence[int] = None,
     trace_width: float = 5.0,
     trace_color: Sequence = [1.0, 1.0, 1.0, 0.1],
+    show_domain_traces: bool = False,
+    domain_trace_colors: Sequence[Sequence[float]] = None,
     reference: np.ndarray = None,
     reference_fps: float = 30.0,
     record_video: bool = False,
@@ -57,7 +71,16 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         max_traces: The maximum number of traces to show at once.
         trace_idxs: The indices of the traces to show.
         trace_width: The width of the trace lines (in pixels).
-        trace_color: The RGBA color of the trace lines.
+        trace_color: The RGBA color of the trace lines. When
+            ``show_domain_traces`` is False, applied to all traces. When True,
+            its alpha is reused for the auto-generated per-domain palette.
+        show_domain_traces: If True, draw one trace per (sample, domain) pair
+            instead of just the first domain. Each domain gets a distinct
+            color. Multiplies the number of rendered lines by
+            ``controller.num_randomizations``.
+        domain_trace_colors: Optional RGBA palette (one row per domain) used
+            when ``show_domain_traces`` is True. Defaults to an HSV-spaced
+            palette that reuses the alpha from ``trace_color``.
         reference: The reference trajectory (qs) to visualize.
         reference_fps: The frame rate of the reference trajectory.
         record_video: Whether to record a video of the simulation.
@@ -107,6 +130,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     _ = jit_interp_func(tq, tk, knots)
     _ = jit_interp_func(tq, tk, knots)
     print(f"Time to jit: {time.time() - st:.3f} seconds")
+
     num_rollouts = rollouts.controls.shape[1]
     if trace_idxs is not None and max_traces is not None:
         if max_traces != len(trace_idxs):
@@ -125,6 +149,31 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     else:
         trace_idxs = list(range(num_rollouts))
     num_traces = len(trace_idxs)
+
+    # Per-domain trace setup.
+    if show_domain_traces and rollouts.trace_sites_per_domain is None:
+        raise RuntimeError(
+            "show_domain_traces=True but the controller did not produce "
+            "per-domain trace data. Use a controller with num_randomizations "
+            ">= 1 routed through rollout_with_randomizations."
+        )
+    num_domains = (
+        rollouts.trace_sites_per_domain.shape[0] if show_domain_traces else 1
+    )
+    if show_domain_traces:
+        if domain_trace_colors is not None:
+            domain_palette = np.asarray(domain_trace_colors, dtype=np.float32)
+            if domain_palette.shape != (num_domains, 4):
+                raise ValueError(
+                    f"domain_trace_colors must have shape ({num_domains}, 4), "
+                    f"got {domain_palette.shape}"
+                )
+        else:
+            domain_palette = _default_domain_palette(
+                num_domains, alpha=float(trace_color[3])
+            )
+    else:
+        domain_palette = np.asarray(trace_color, dtype=np.float32)[None, :]
 
     # Ghost reference setup
     if reference is not None:
@@ -168,18 +217,21 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         # Set up rollout traces
         if show_traces:
             num_trace_sites = len(controller.task.trace_site_ids)
-            for i in range(
-                num_trace_sites * num_traces * controller.ctrl_steps
-            ):
-                mujoco.mjv_initGeom(
-                    viewer.user_scn.geoms[i],
-                    type=mujoco.mjtGeom.mjGEOM_LINE,
-                    size=np.zeros(3),
-                    pos=np.zeros(3),
-                    mat=np.eye(3).flatten(),
-                    rgba=np.array(trace_color),
-                )
-                viewer.user_scn.ngeom += 1
+            geom_idx = 0
+            for _ in range(num_trace_sites):
+                for d in range(num_domains):
+                    rgba = domain_palette[d]
+                    for _ in range(num_traces * controller.ctrl_steps):
+                        mujoco.mjv_initGeom(
+                            viewer.user_scn.geoms[geom_idx],
+                            type=mujoco.mjtGeom.mjGEOM_LINE,
+                            size=np.zeros(3),
+                            pos=np.zeros(3),
+                            mat=np.eye(3).flatten(),
+                            rgba=np.asarray(rgba),
+                        )
+                        viewer.user_scn.ngeom += 1
+                        geom_idx += 1
 
         # Add geometry for the ghost reference
         if reference is not None:
@@ -206,18 +258,23 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             # Visualize the rollouts
             if show_traces:
+                if show_domain_traces:
+                    trace_data = rollouts.trace_sites_per_domain
+                else:
+                    trace_data = rollouts.trace_sites[None, ...]
                 ii = 0
                 for k in range(num_trace_sites):
-                    for i in trace_idxs:
-                        for j in range(controller.ctrl_steps):
-                            mujoco.mjv_connector(
-                                viewer.user_scn.geoms[ii],
-                                mujoco.mjtGeom.mjGEOM_LINE,
-                                trace_width,
-                                rollouts.trace_sites[i, j, k],
-                                rollouts.trace_sites[i, j + 1, k],
-                            )
-                            ii += 1
+                    for d in range(num_domains):
+                        for i in trace_idxs:
+                            for j in range(controller.ctrl_steps):
+                                mujoco.mjv_connector(
+                                    viewer.user_scn.geoms[ii],
+                                    mujoco.mjtGeom.mjGEOM_LINE,
+                                    trace_width,
+                                    trace_data[d, i, j, k],
+                                    trace_data[d, i, j + 1, k],
+                                )
+                                ii += 1
 
             # Update the ghost reference
             if reference is not None:
