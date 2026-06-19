@@ -2,6 +2,7 @@ import argparse
 
 import jax
 import mujoco
+import numpy as np
 from evosax.algorithms.distribution_based import (
     CMA_ES,
     GradientlessDescent,
@@ -194,6 +195,16 @@ key_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_KEY, key_name)
 if key_id != -1:
     mj_data.qpos = mj_model.key_qpos[key_id]
     print(f"Set initial state to keyframe: {key_name}")
+
+# Optional: override the initial EE and/or T pose on top of the keyframe.
+# Pass only what you want to change; omit args to keep the keyframe value.
+task.set_initial_state(
+    mj_data,
+    ee_pos=np.array([0.3, 0.0, 0.045]),
+    # ee_quat=np.array([0.0, 0.7071, 0.7071, 0.0]),  # MuJoCo wxyz
+    T_xy=np.array([0.45, 0.05]),
+    # T_yaw=0.0,  # rad, around world Z
+)
 
 # Run the interactive simulation
 run_interactive(

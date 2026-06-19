@@ -338,6 +338,163 @@ class PushTFr3(Task):
 
         return dq
 
+    ##################################
+    ##      Initial-state setup     ##
+    ##################################
+
+    def _solve_ik(
+        self,
+        target_pos: np.ndarray,
+        target_quat: np.ndarray,
+        q_seed: np.ndarray | None = None,
+        max_iters: int = 200,
+        pos_tol: float = 1e-4,
+        rot_tol: float = 1e-3,
+        step_scale: float = 0.5,
+        damping: float = 1e-3,
+    ) -> tuple[np.ndarray, bool]:
+        """Iterative damped least-squares IK for the EE pose.
+
+        Args:
+            target_pos: Desired EE position in world frame, shape (3,).
+            target_quat: Desired EE quaternion in MuJoCo [w, x, y, z].
+            q_seed: Initial guess for the 7 FR3 joints. Defaults to q_home.
+            max_iters: Maximum solver iterations.
+            pos_tol: Position-error convergence threshold (m).
+            rot_tol: Rotation-error convergence threshold (rad).
+            step_scale: IK update step size; values < 1 trade speed for
+                stability.
+            damping: Damped least-squares regularizer.
+
+        Returns:
+            (q_solution, converged) where q_solution is the 7-vector of joint
+            angles and converged indicates whether tolerances were met.
+        """
+        if q_seed is None:
+            if self.q_home is None:
+                raise RuntimeError(
+                    "No q_seed provided and no 'home' keyframe in the model."
+                )
+            q_seed = np.asarray(self.q_home, dtype=np.float64)
+        q = np.asarray(q_seed, dtype=np.float64).copy()
+
+        scratch = mujoco.MjData(self.mj_model)
+        r_target = R.from_quat(
+            [target_quat[1], target_quat[2], target_quat[3], target_quat[0]]
+        )
+        q_min = self.joint_limits[:, 0]
+        q_max = self.joint_limits[:, 1]
+        reg = damping * np.eye(6)
+
+        converged = False
+        for _ in range(max_iters):
+            scratch.qpos[self.actuator_joint_idxs] = q
+            mujoco.mj_forward(self.mj_model, scratch)
+
+            ee_pos = scratch.xpos[self.ee_body_id]
+            ee_quat = scratch.sensordata[
+                self.ee_quat_adr : self.ee_quat_adr + 4
+            ]
+            r_curr = R.from_quat(
+                [ee_quat[1], ee_quat[2], ee_quat[3], ee_quat[0]]
+            )
+            pos_err = target_pos - ee_pos
+            rot_err = (r_target * r_curr.inv()).as_rotvec()
+
+            if (
+                np.linalg.norm(pos_err) < pos_tol
+                and np.linalg.norm(rot_err) < rot_tol
+            ):
+                converged = True
+                break
+
+            mujoco.mj_jacBody(
+                self.mj_model, scratch, self.jacp, self.jacr, self.ee_body_id
+            )
+            J = np.vstack([self.jacp, self.jacr])[:, self.dof_adr]
+            twist = np.concatenate([pos_err, rot_err])
+            dq = step_scale * J.T @ np.linalg.solve(J @ J.T + reg, twist)
+            q = np.clip(q + dq, q_min, q_max)
+
+        return q, converged
+
+    def set_initial_state(
+        self,
+        mj_data: mujoco.MjData,
+        ee_pos: np.ndarray | None = None,
+        ee_quat: np.ndarray | None = None,
+        T_xy: np.ndarray | None = None,
+        T_yaw: float | None = None,
+        q_seed: np.ndarray | None = None,
+    ) -> None:
+        """Override the robot and/or T pose in ``mj_data`` in place.
+
+        Designed as an overlay on top of a keyframe load: pass only the
+        elements you want to override.
+
+        Args:
+            mj_data: MjData to mutate. Caller is expected to have populated
+                qpos (e.g., from the 'home' keyframe) before this call.
+            ee_pos: Desired EE position (m, world). Triggers IK on the FR3
+                joints when provided.
+            ee_quat: Desired EE quaternion in MuJoCo [w, x, y, z]. If only
+                ``ee_pos`` is given, defaults to the canonical point-down
+                quaternion used by this task.
+            T_xy: Desired T-block planar position (x, y) in meters. Z is left
+                at the keyframe value.
+            T_yaw: Desired T-block yaw around world Z (rad). Only valid for
+                ``manipulation_type='free'``.
+            q_seed: Optional IK seed (7,). Defaults to ``self.q_home``.
+        """
+        if ee_pos is not None:
+            ee_pos = np.asarray(ee_pos, dtype=np.float64)
+            if ee_quat is None:
+                ee_quat = np.asarray(self.goal_quat_ee, dtype=np.float64)
+            else:
+                ee_quat = np.asarray(ee_quat, dtype=np.float64)
+            q_sol, converged = self._solve_ik(
+                ee_pos, ee_quat, q_seed=q_seed
+            )
+            if not converged:
+                print(
+                    "WARNING: PushTFr3 IK did not converge for "
+                    f"ee_pos={ee_pos.tolist()}; using best-effort solution."
+                )
+            mj_data.qpos[self.actuator_joint_idxs] = q_sol
+        elif ee_quat is not None:
+            raise ValueError(
+                "ee_quat was provided without ee_pos; specify ee_pos as well."
+            )
+
+        if T_xy is not None or T_yaw is not None:
+            if self.manipulation_type == "free":
+                T_adr = int(self.mj_model.jnt_qposadr[self.T_joint_idxs[0]])
+                if T_xy is not None:
+                    mj_data.qpos[T_adr : T_adr + 2] = np.asarray(
+                        T_xy, dtype=np.float64
+                    )
+                if T_yaw is not None:
+                    half = 0.5 * float(T_yaw)
+                    mj_data.qpos[T_adr + 3 : T_adr + 7] = np.array(
+                        [np.cos(half), 0.0, 0.0, np.sin(half)],
+                        dtype=np.float64,
+                    )
+            else:  # 'joint'
+                if T_yaw is not None:
+                    raise ValueError(
+                        "T_yaw cannot be set when manipulation_type='joint' "
+                        "(no rotational DOF on the T block)."
+                    )
+                if T_xy is not None:
+                    T_addrs = self.mj_model.jnt_qposadr[
+                        self.T_joint_idxs[:2]
+                    ]
+                    mj_data.qpos[T_addrs] = np.asarray(
+                        T_xy, dtype=np.float64
+                    )
+
+        mujoco.mj_forward(self.mj_model, mj_data)
+
     def control_mapper_mj(
         self,
         state: mujoco.MjData,
