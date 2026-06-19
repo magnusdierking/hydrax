@@ -117,8 +117,11 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             )
     if trace_idxs is not None:
         trace_idxs = [i for i in trace_idxs if i < num_rollouts]
-    elif max_traces is not None:
-        trace_idxs = list(range(min(num_rollouts, max_traces)))
+    elif max_traces is not None and max_traces < num_rollouts:
+        # Spread traces uniformly across the rollout batch.
+        trace_idxs = np.linspace(
+            0, num_rollouts - 1, max_traces, dtype=int
+        ).tolist()
     else:
         trace_idxs = list(range(num_rollouts))
     num_traces = len(trace_idxs)
