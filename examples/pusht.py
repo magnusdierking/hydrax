@@ -52,7 +52,7 @@ args = parser.parse_args()
 # ============================================================
 # Global options — shared across all algorithms
 # ============================================================
-NUM_SAMPLES = 128
+NUM_SAMPLES = 64
 NUM_RANDOMIZATIONS = 4
 PLAN_HORIZON = 0.5
 SPLINE_TYPE = "zero"

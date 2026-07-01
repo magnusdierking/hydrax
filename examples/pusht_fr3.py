@@ -1,6 +1,7 @@
 import argparse
 
 import jax
+import jax.numpy as jnp
 import mujoco
 import numpy as np
 from evosax.algorithms.distribution_based import (
@@ -16,6 +17,7 @@ from hydrax.algs import CEM, DIAL, MPPI, MTP, Evosax, PredictiveSampling
 from hydrax.risk import WorstCase
 from hydrax.simulation.deterministic import run_interactive
 from hydrax.tasks.pusht_fr3 import PushTFr3
+from hydrax.utils.randomization import apply_randomization_spec
 
 """
 Run an interactive simulation of the push-T FR3 task.
@@ -54,12 +56,12 @@ args = parser.parse_args()
 # ============================================================
 # Global options — shared across all algorithms
 # ============================================================
-NUM_SAMPLES = 64
+NUM_SAMPLES = 32
 NUM_RANDOMIZATIONS = 2
 PLAN_HORIZON = 0.8
 SPLINE_TYPE = "cubic"
-MANIPULATION_TYPE = "free"
-NUM_KNOTS = 8
+MANIPULATION_TYPE = "joint"
+NUM_KNOTS = 5
 
 # Shared keyword arguments passed to every controller
 shared_kwargs = dict(
@@ -73,7 +75,7 @@ shared_kwargs = dict(
 # Define the task (cost and dynamics)
 task = PushTFr3(
     impl="warp" if args.warp else "jax",
-    trace_sites=["ee_site"],
+    trace_sites=["ee_site", "T_1"],
     manipulation_type=MANIPULATION_TYPE,
 )
 
@@ -186,6 +188,37 @@ elif args.algorithm == "dial":
 else:
     parser.error("Invalid algorithm")
 
+
+# RANDOMIZATION
+ee_margins = jnp.linspace(-0.05, 0.05, NUM_RANDOMIZATIONS)
+# block_slide_friction = jnp.linspace(0.4, 0.8, NUM_RANDOMIZATIONS)
+randomization_spec = {
+    "geom": {
+        "ee": {
+            "margin": ee_margins,
+        },
+    },
+    # body.friction applies to every geom in the named body.
+    # "body": {
+    #     "block": {"friction": (0, block_slide_friction)},
+    # },
+}
+
+# The block's planar joints (T_x/T_y/T_z) only exist in 'joint' manipulation
+# mode; in 'free' mode the block rides a single free joint with no
+# frictionloss/damping. Randomize their friction loss to vary how the block
+# slides and rotates.
+if MANIPULATION_TYPE == "joint":
+    slide_frictionloss = jnp.linspace(0.1, 1.8, NUM_RANDOMIZATIONS)
+    hinge_frictionloss = jnp.linspace(0.001, 1.05, NUM_RANDOMIZATIONS)
+    randomization_spec["joint"] = {
+        "T_x": {"frictionloss": slide_frictionloss},
+        "T_y": {"frictionloss": slide_frictionloss},
+        "T_z": {"frictionloss": hinge_frictionloss},
+    }
+
+apply_randomization_spec(ctrl, randomization_spec)
+
 # Define the model used for simulation
 mj_model = task.mj_model
 mj_data = mujoco.MjData(mj_model)
@@ -202,8 +235,8 @@ task.set_initial_state(
     mj_data,
     ee_pos=np.array([0.3, 0.0, 0.045]),
     # ee_quat=np.array([0.0, 0.7071, 0.7071, 0.0]),  # MuJoCo wxyz
-    T_xy=np.array([0.45, 0.05]),
-    # T_yaw=0.0,  # rad, around world Z
+    T_xy=np.array([0.05, 0.05]),
+    T_yaw=0.3,  # rad, around world Z
 )
 
 # Run the interactive simulation
@@ -211,7 +244,7 @@ run_interactive(
     ctrl,
     mj_model,
     mj_data,
-    frequency=20,
+    frequency=10,
     show_traces=True,
     show_domain_traces=True,
     max_traces=5,
