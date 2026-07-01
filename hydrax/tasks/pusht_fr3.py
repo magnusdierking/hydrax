@@ -442,8 +442,10 @@ class PushTFr3(Task):
                 quaternion used by this task.
             T_xy: Desired T-block planar position (x, y) in meters. Z is left
                 at the keyframe value.
-            T_yaw: Desired T-block yaw around world Z (rad). Only valid for
-                ``manipulation_type='free'``.
+            T_yaw: Desired T-block yaw around world Z (rad). Supported for
+                both ``manipulation_type='free'`` (encoded as a quaternion
+                on the free joint) and ``'joint'`` (written to the T_z
+                hinge).
             q_seed: Optional IK seed (7,). Defaults to ``self.q_home``.
         """
         if ee_pos is not None:
@@ -480,18 +482,19 @@ class PushTFr3(Task):
                         dtype=np.float64,
                     )
             else:  # 'joint'
-                if T_yaw is not None:
-                    raise ValueError(
-                        "T_yaw cannot be set when manipulation_type='joint' "
-                        "(no rotational DOF on the T block)."
-                    )
+                # T_x, T_y are slides; T_z is a hinge holding the yaw angle.
                 if T_xy is not None:
-                    T_addrs = self.mj_model.jnt_qposadr[
+                    T_xy_addrs = self.mj_model.jnt_qposadr[
                         self.T_joint_idxs[:2]
                     ]
-                    mj_data.qpos[T_addrs] = np.asarray(
+                    mj_data.qpos[T_xy_addrs] = np.asarray(
                         T_xy, dtype=np.float64
                     )
+                if T_yaw is not None:
+                    T_yaw_adr = int(
+                        self.mj_model.jnt_qposadr[self.T_joint_idxs[2]]
+                    )
+                    mj_data.qpos[T_yaw_adr] = float(T_yaw)
 
         mujoco.mj_forward(self.mj_model, mj_data)
 
